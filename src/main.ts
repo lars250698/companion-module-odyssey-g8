@@ -5,6 +5,7 @@ import {
 	SomeCompanionConfigField,
 	CompanionHTTPRequest,
 	CompanionHTTPResponse,
+	CompanionVariableValues,
 } from '@companion-module/base'
 import { GetConfigFields, type ModuleConfig } from './config.js'
 import { UpdateVariableDefinitions } from './variables.js'
@@ -116,6 +117,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 
 	updateVariableDefinitions(): void {
 		UpdateVariableDefinitions(this)
+		this.updateAllDeviceVariableValues()
 	}
 
 	async handleHttpRequest(req: CompanionHTTPRequest): Promise<CompanionHTTPResponse> {
@@ -192,6 +194,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				clearTimeout(entry.timer)
 			}
 			this.deviceState.delete(deviceId)
+			this.clearDeviceVariableValues(deviceId)
 		}
 	}
 
@@ -212,6 +215,16 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			throw new Error('SmartThings client is not initialized')
 		}
 		return this.smartThingsClient
+	}
+
+	getDeviceVariableBaseId(deviceId: string): string {
+		const sanitized = deviceId.replace(/[^A-Za-z0-9_]/g, '_')
+		return `device_${sanitized}`
+	}
+
+	getDeviceDisplayName(deviceId: string): string {
+		const device = this.devices.find((d) => d.deviceId === deviceId)
+		return device?.name || (device as { label?: string } | undefined)?.label || device?.presentationId || deviceId
 	}
 
 	async getDeviceStateSnapshot(deviceId: string, forceRefresh = false): Promise<DeviceStatus | undefined> {
@@ -248,6 +261,51 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		})
 	}
 
+	updateDeviceVariableValues(deviceId: string): void {
+		if (!this.isKnownDevice(deviceId)) return
+		const ids = this.getDeviceVariableIds(deviceId)
+		const status = this.deviceState.get(deviceId)?.status
+		const powerValue = this.formatAttributeValue(status?.components?.['main']?.['switch']?.['switch']?.['value'])
+		const inputValue = this.formatAttributeValue(
+			status?.components?.['main']?.['samsungvd.mediaInputSource']?.['inputSource']?.['value'],
+		)
+		const muteValue = this.formatAttributeValue(status?.components?.['main']?.['audioMute']?.['mute']?.['value'])
+		const volumeAttribute = status?.components?.['main']?.['audioVolume']?.['volume']
+		const values: CompanionVariableValues = {
+			[ids.power]: powerValue,
+			[ids.input]: inputValue,
+			[ids.mute]: muteValue,
+			[ids.volume]: (volumeAttribute?.value as number) ?? 0,
+		}
+		this.setVariableValues(values)
+	}
+
+	updateAllDeviceVariableValues(): void {
+		for (const device of this.devices) {
+			this.updateDeviceVariableValues(device.deviceId)
+		}
+	}
+
+	private getDeviceVariableIds(deviceId: string): { power: string; input: string; mute: string; volume: string } {
+		const base = this.getDeviceVariableBaseId(deviceId)
+		return {
+			power: `${base}_power`,
+			input: `${base}_input`,
+			mute: `${base}_mute`,
+			volume: `${base}_volume`,
+		}
+	}
+
+	private clearDeviceVariableValues(deviceId: string): void {
+		const ids = this.getDeviceVariableIds(deviceId)
+		this.setVariableValues({
+			[ids.power]: '',
+			[ids.input]: '',
+			[ids.mute]: '',
+			[ids.volume]: '',
+		})
+	}
+
 	private normalizePollInterval(value: unknown): number {
 		const numeric = typeof value === 'number' && !Number.isNaN(value) ? value : DEFAULT_POLL_MS
 		return Math.min(Math.max(numeric, MIN_POLL_MS), MAX_BACKOFF_MS)
@@ -259,6 +317,12 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 
 	private isKnownDevice(deviceId: string): boolean {
 		return this.devices.some((device) => device.deviceId === deviceId)
+	}
+
+	private formatAttributeValue(value: unknown): string {
+		if (typeof value === 'string') return value
+		if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+		return ''
 	}
 
 	private ensureDeviceStateEntry(deviceId: string): DeviceStateEntry {
@@ -306,6 +370,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 				entry.backoffMs = this.getConfiguredPollInterval()
 				entry.suppressUpdatesUntil = undefined
 				if (changed || forceFeedbackUpdate) {
+					this.updateDeviceVariableValues(deviceId)
 					this.refreshFeedbacksFromState()
 				}
 			} catch (err) {
@@ -344,6 +409,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 					clearTimeout(entry.timer)
 				}
 				this.deviceState.delete(deviceId)
+				this.clearDeviceVariableValues(deviceId)
 			}
 		}
 	}
@@ -355,6 +421,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			}
 		}
 		this.deviceState.clear()
+		this.updateAllDeviceVariableValues()
 	}
 
 	private refreshFeedbacksFromState(): void {
@@ -375,6 +442,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		entry.status = base
 		entry.serialized = JSON.stringify(base)
 		entry.suppressUpdatesUntil = Date.now() + OPTIMISTIC_SUPPRESS_MS
+		this.updateDeviceVariableValues(deviceId)
 		this.refreshFeedbacksFromState()
 	}
 }
