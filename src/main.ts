@@ -28,7 +28,7 @@ type DeviceStateEntry = {
 const DEFAULT_POLL_MS = 10000
 const MIN_POLL_MS = 1000
 const MAX_BACKOFF_MS = 60000
-const OPTIMISTIC_SUPPRESS_MS = 4000
+const OPTIMISTIC_SUPPRESS_MS = 5000
 
 export class ModuleInstance extends InstanceBase<ModuleConfig> {
 	config!: ModuleConfig // Setup in init()
