@@ -22,11 +22,13 @@ type DeviceStateEntry = {
 	timer?: NodeJS.Timeout
 	refreshPromise?: Promise<void>
 	backoffMs: number
+	suppressUpdatesUntil?: number
 }
 
 const DEFAULT_POLL_MS = 10000
 const MIN_POLL_MS = 1000
 const MAX_BACKOFF_MS = 60000
+const OPTIMISTIC_SUPPRESS_MS = 4000
 
 export class ModuleInstance extends InstanceBase<ModuleConfig> {
 	config!: ModuleConfig // Setup in init()
@@ -171,11 +173,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			this.log('warn', `Attempted to subscribe unknown device ${deviceId}`)
 			return
 		}
-		let entry = this.deviceState.get(deviceId)
-		if (!entry) {
-			entry = { refCount: 0, backoffMs: this.getConfiguredPollInterval() }
-			this.deviceState.set(deviceId, entry)
-		}
+		const entry = this.ensureDeviceStateEntry(deviceId)
 		entry.refCount += 1
 		if (entry.refCount === 1) {
 			this.refreshDeviceState(deviceId, true).catch((err) => {
@@ -218,25 +216,36 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 
 	async getDeviceStateSnapshot(deviceId: string, forceRefresh = false): Promise<DeviceStatus | undefined> {
 		if (!this.smartThingsClient) return undefined
-		let entry = this.deviceState.get(deviceId)
-		let temporarySubscription = false
-		if (!entry) {
-			this.subscribeDeviceState(deviceId)
-			entry = this.deviceState.get(deviceId)
-			temporarySubscription = true
-		}
-		if (!entry) return undefined
+		const entry = this.ensureDeviceStateEntry(deviceId)
 		if (forceRefresh || !entry.status) {
 			const pending = forceRefresh || !entry.status ? this.refreshDeviceState(deviceId, true) : entry.refreshPromise
 			if (pending) {
 				await pending
 			}
 		}
-		const status = entry.status
-		if (temporarySubscription) {
-			this.unsubscribeDeviceState(deviceId)
-		}
-		return status
+		return entry.status
+	}
+
+	optimisticSetAttribute(
+		deviceId: string,
+		componentId: string,
+		capabilityId: string,
+		attributeId: string,
+		value: unknown,
+		extraFields?: Record<string, unknown>,
+	): void {
+		this.optimisticUpdateDeviceState(deviceId, (status) => {
+			const components = (status.components ??= {} as Record<string, any>)
+			const component = (components[componentId] ??= {} as Record<string, any>)
+			const capability = (component[capabilityId] ??= {} as Record<string, any>)
+			const attribute = (capability[attributeId] ??= {} as Record<string, any>)
+			attribute.value = value
+			if (extraFields) {
+				for (const [key, val] of Object.entries(extraFields)) {
+					attribute[key] = val
+				}
+			}
+		})
 	}
 
 	private normalizePollInterval(value: unknown): number {
@@ -250,6 +259,15 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 
 	private isKnownDevice(deviceId: string): boolean {
 		return this.devices.some((device) => device.deviceId === deviceId)
+	}
+
+	private ensureDeviceStateEntry(deviceId: string): DeviceStateEntry {
+		let entry = this.deviceState.get(deviceId)
+		if (!entry) {
+			entry = { refCount: 0, backoffMs: this.getConfiguredPollInterval() }
+			this.deviceState.set(deviceId, entry)
+		}
+		return entry
 	}
 
 	private scheduleNextDeviceRefresh(deviceId: string, entry: DeviceStateEntry): void {
@@ -275,11 +293,18 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			try {
 				await refresh(this, deviceId)
 				const status = await client.devices.getStatus(deviceId)
+				const now = Date.now()
+				if (entry.suppressUpdatesUntil && now < entry.suppressUpdatesUntil) {
+					const delay = Math.max(entry.suppressUpdatesUntil - now, MIN_POLL_MS)
+					entry.backoffMs = delay
+					return
+				}
 				const serialized = JSON.stringify(status)
 				const changed = entry.serialized !== serialized
 				entry.status = status
 				entry.serialized = serialized
 				entry.backoffMs = this.getConfiguredPollInterval()
+				entry.suppressUpdatesUntil = undefined
 				if (changed || forceFeedbackUpdate) {
 					this.refreshFeedbacksFromState()
 				}
@@ -334,6 +359,23 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 
 	private refreshFeedbacksFromState(): void {
 		this.checkFeedbacks('PowerState', 'InputState', 'MuteState', 'AudioVolume')
+	}
+
+	private optimisticUpdateDeviceState(deviceId: string, mutator: (status: DeviceStatus) => void): void {
+		const entry = this.ensureDeviceStateEntry(deviceId)
+		const base: DeviceStatus = entry.status
+			? (JSON.parse(JSON.stringify(entry.status)) as DeviceStatus)
+			: ({ components: {} } as DeviceStatus)
+		try {
+			mutator(base)
+		} catch (err) {
+			this.log('debug', `Optimistic update failed for ${deviceId}: ${String(err)}`)
+			return
+		}
+		entry.status = base
+		entry.serialized = JSON.stringify(base)
+		entry.suppressUpdatesUntil = Date.now() + OPTIMISTIC_SUPPRESS_MS
+		this.refreshFeedbacksFromState()
 	}
 }
 

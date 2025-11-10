@@ -1,7 +1,6 @@
 import { combineRgb, SomeCompanionFeedbackInputField } from '@companion-module/base'
 import type { ModuleInstance } from './main.js'
-
-type InputSourceMapEntry = { id: string; name: string }
+import { InputSourceMapEntry } from './types.js'
 
 function requireDeviceId(value: unknown): string {
 	if (!value || typeof value !== 'string') {

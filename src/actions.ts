@@ -1,5 +1,6 @@
 import { SomeCompanionActionInputField } from '@companion-module/base'
 import type { ModuleInstance } from './main.js'
+import { InputSourceMapEntry } from './types.js'
 
 export function UpdateActions(self: ModuleInstance): void {
 	const deviceIdDropdownOption: SomeCompanionActionInputField = {
@@ -34,14 +35,22 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!input || typeof input !== 'string') {
 					throw new Error()
 				}
+				const deviceState = await self.getDeviceStateSnapshot(deviceId, true)
+				const capability = deviceState?.components?.['main']?.['samsungvd.mediaInputSource']
+				const inputSourceMap: InputSourceMapEntry[] =
+					(capability?.['supportedInputSourcesMap']?.['value'] as InputSourceMapEntry[]) ?? []
+				const newInput = inputSourceMap.find((inputSource) => inputSource.id === input || inputSource.name === input)
+				if (!newInput) {
+					throw new Error(`Input ${input} not found`)
+				}
 				const client = self.getSmartThingsClient()
 				await client.devices.executeCommand(deviceId, {
 					component: 'main',
 					capability: 'samsungvd.mediaInputSource',
 					command: 'setInputSource',
-					arguments: [input],
+					arguments: [newInput.id],
 				})
-				self.checkFeedbacks('InputState')
+				self.optimisticSetAttribute(deviceId, 'main', 'samsungvd.mediaInputSource', 'inputSource', newInput.id)
 			},
 		},
 		powerToggle: {
@@ -54,23 +63,21 @@ export function UpdateActions(self: ModuleInstance): void {
 				}
 				const client = self.getSmartThingsClient()
 				const deviceState = await self.getDeviceStateSnapshot(deviceId, true)
-				let isOn: boolean | undefined
+				let isCurrentlyOn: boolean | undefined
 				if (deviceState) {
 					const switchState = deviceState.components?.['main']?.['switch']?.['switch']?.['value']
-					isOn = switchState === 'on'
+					isCurrentlyOn = switchState === 'on'
 				} else {
 					const fallback = await client.devices.getStatus(deviceId)
-					isOn = fallback.components?.['main']?.['switch']?.['switch']?.['value'] === 'on'
+					isCurrentlyOn = fallback.components?.['main']?.['switch']?.['switch']?.['value'] === 'on'
 				}
-				const isCurrentlyOn = isOn === true
-				const command = isCurrentlyOn ? 'off' : 'on'
+				const command = isCurrentlyOn === true ? 'off' : 'on'
 				await client.devices.executeCommand(deviceId, {
 					component: 'main',
 					capability: 'switch',
 					command: command,
 				})
-				self.requestDeviceRefresh(deviceId, true)
-				self.checkFeedbacks('PowerState')
+				self.optimisticSetAttribute(deviceId, 'main', 'switch', 'switch', command)
 			},
 		},
 		power: {
@@ -109,7 +116,7 @@ export function UpdateActions(self: ModuleInstance): void {
 					capability: 'switch',
 					command: state,
 				})
-				self.checkFeedbacks('PowerState')
+				self.optimisticSetAttribute(deviceId, 'main', 'switch', 'switch', state)
 			},
 		},
 		volume: {
@@ -142,13 +149,23 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!action || typeof action !== 'string') {
 					throw new Error()
 				}
+				const deviceState = await self.getDeviceStateSnapshot(deviceId)
+				const volumeStatus = deviceState?.components?.['main']?.['audioVolume']?.['volume']
+				if (volumeStatus) {
+					const delta = action === 'volumeUp' ? 1 : -1
+					const currentValue = typeof volumeStatus.value === 'number' ? volumeStatus.value : Number(volumeStatus.value)
+					if (!Number.isNaN(currentValue)) {
+						const nextValue = Math.max(0, currentValue + delta)
+						const extra = volumeStatus.unit ? { unit: volumeStatus.unit } : undefined
+						self.optimisticSetAttribute(deviceId, 'main', 'audioVolume', 'volume', nextValue, extra)
+					}
+				}
 				const client = self.getSmartThingsClient()
 				await client.devices.executeCommand(deviceId, {
 					component: 'main',
 					capability: 'audioVolume',
 					command: action,
 				})
-				self.checkFeedbacks('AudioVolume')
 			},
 		},
 		muteToggle: {
@@ -176,8 +193,7 @@ export function UpdateActions(self: ModuleInstance): void {
 					command: 'setMute',
 					arguments: [state],
 				})
-				self.requestDeviceRefresh(deviceId, true)
-				self.checkFeedbacks('MuteState')
+				self.optimisticSetAttribute(deviceId, 'main', 'audioMute', 'mute', state)
 			},
 		},
 		mute: {
@@ -217,7 +233,7 @@ export function UpdateActions(self: ModuleInstance): void {
 					command: 'setMute',
 					arguments: [state],
 				})
-				self.checkFeedbacks('MuteState')
+				self.optimisticSetAttribute(deviceId, 'main', 'audioMute', 'mute', state)
 			},
 		},
 	})
