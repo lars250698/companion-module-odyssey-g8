@@ -1,5 +1,5 @@
 {
-	"name": "your-module-name",
+	"name": "samsung-g8-control",
 	"version": "0.1.0",
 	"main": "dist/main.js",
 	"type": "module",
@@ -23,7 +23,8 @@
 		"yarn": "^4"
 	},
 	"dependencies": {
-		"@companion-module/base": "~1.12.1"
+		"@companion-module/base": "~1.12.1",
+		"@smartthings/core-sdk": "^8.3.2"
 	},
 	"devDependencies": {
 		"@companion-module/tools": "^2.4.2",

@@ -1,16 +1,16 @@
 {
-	"id": "your-module-name",
-	"name": "your-module-name",
-	"shortname": "module-shortname",
-	"description": "A short one line description of your module",
+	"id": "odyssey-g8-control",
+	"name": "odyssey-g8-control",
+	"shortname": "odyssey-g8",
+	"description": "A small companion module to control a Samsung Odyssey G8 monitor via Samsung SmartThings",
 	"version": "0.0.0",
 	"license": "MIT",
-	"repository": "git+https://github.com/bitfocus/companion-module-your-module-name.git",
-	"bugs": "https://github.com/bitfocus/companion-module-your-module-name/issues",
+	"repository": "git+https://github.com/lars250698/companion-module-odyssey-g8.git",
+	"bugs": "https://github.com/lars250698/companion-module-odyssey-g8/issues",
 	"maintainers": [
 		{
-			"name": "Your name",
-			"email": "Your email"
+			"name": "Lars Eppinger",
+			"email": "lars@eppinger.dev"
 		}
 	],
 	"runtime": {
@@ -20,7 +20,7 @@
 		"entrypoint": "../dist/main.js"
 	},
 	"legacyIds": [],
-	"manufacturer": "Your company",
-	"products": ["Your product"],
+	"manufacturer": "Samsung",
+	"products": ["Odyssey G8"],
 	"keywords": []
 }
