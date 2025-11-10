@@ -8,6 +8,7 @@ export interface ModuleConfig {
 	accessToken: string
 	refreshToken: string
 	tokenExpiry: string
+	pollInterval?: number
 }
 
 export function GetConfigFields(): SomeCompanionConfigField[] {
@@ -15,6 +16,15 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{ type: 'textinput', id: 'clientId', label: 'SmartThings Client ID', width: 6, required: true },
 		{ type: 'textinput', id: 'clientSecret', label: 'SmartThings Client Secret', width: 6, required: true },
 		{ type: 'textinput', id: 'scopes', label: 'Scopes', default: 'r:devices:* x:devices:*', width: 12 },
+		{
+			type: 'number',
+			id: 'pollInterval',
+			label: 'Monitor refresh interval (ms)',
+			default: 10000,
+			width: 6,
+			min: 1000,
+			max: 60000,
+		},
 		// shows the URL user must open in a browser to authorize
 		{ type: 'textinput', id: 'authUrl', label: 'Authorize URL (open this)', width: 12 },
 		// hidden/persisted after success:

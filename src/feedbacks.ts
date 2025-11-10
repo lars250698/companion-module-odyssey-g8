@@ -1,7 +1,21 @@
 import { combineRgb, SomeCompanionFeedbackInputField } from '@companion-module/base'
 import type { ModuleInstance } from './main.js'
-import { CapabilityStatus } from '@smartthings/core-sdk'
-import { refresh } from './helpers.js'
+
+type InputSourceMapEntry = { id: string; name: string }
+
+function requireDeviceId(value: unknown): string {
+	if (!value || typeof value !== 'string') {
+		throw new Error('Device is required')
+	}
+	return value
+}
+
+function requireText(value: unknown, field: string): string {
+	if (!value || typeof value !== 'string') {
+		throw new Error(`${field} is required`)
+	}
+	return value
+}
 
 export function UpdateFeedbacks(self: ModuleInstance): void {
 	const deviceIdDropdownOption: SomeCompanionFeedbackInputField = {
@@ -24,17 +38,27 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 				color: combineRgb(0, 0, 0),
 			},
 			options: [deviceIdDropdownOption],
-			callback: async (feedback) => {
+			subscribe: (feedback) => {
 				const deviceId = feedback.options.deviceId
-				if (!deviceId || typeof deviceId !== 'string') {
-					throw new Error()
+				if (typeof deviceId === 'string') {
+					self.subscribeDeviceState(deviceId)
 				}
-				const status: CapabilityStatus = await self.smartThingsClient.devices.getCapabilityStatus(
-					deviceId,
-					'main',
-					'switch',
-				)
-				return status?.['switch']?.['value'] === 'on'
+			},
+			unsubscribe: (feedback) => {
+				const deviceId = feedback.options.deviceId
+				if (typeof deviceId === 'string') {
+					self.unsubscribeDeviceState(deviceId)
+				}
+			},
+			callback: (feedback) => {
+				const deviceId = requireDeviceId(feedback.options.deviceId)
+				const status = self.getCachedDeviceState(deviceId)
+				if (!status) {
+					self.requestDeviceRefresh(deviceId)
+					return false
+				}
+				const value = status.components?.['main']?.['switch']?.['switch']?.['value']
+				return value === 'on'
 			},
 		},
 		InputState: {
@@ -53,32 +77,34 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 					default: 'HDMI',
 				},
 			],
-			callback: async (feedback) => {
+			subscribe: (feedback) => {
 				const deviceId = feedback.options.deviceId
-				if (!deviceId || typeof deviceId !== 'string') {
-					throw new Error()
+				if (typeof deviceId === 'string') {
+					self.subscribeDeviceState(deviceId)
 				}
-				const input = feedback.options.input
-				if (!input || typeof input !== 'string') {
-					throw new Error()
+			},
+			unsubscribe: (feedback) => {
+				const deviceId = feedback.options.deviceId
+				if (typeof deviceId === 'string') {
+					self.unsubscribeDeviceState(deviceId)
 				}
-				const status: CapabilityStatus = await self.smartThingsClient.devices.getCapabilityStatus(
-					deviceId,
-					'main',
-					'samsungvd.mediaInputSource',
-				)
-				const inputSourceMap: Array<{ id: string; name: string }> =
-					(status?.['supportedInputSourcesMap']?.['value'] as Array<{ id: string; name: string }>) ?? []
-				if (!inputSourceMap) return false
-
-				const inputSourceName = inputSourceMap.find(
-					(inputSource) => inputSource.id === input || inputSource.name === input,
-				)
-				if (!inputSourceName) return false
-
-				const selectedInput = status?.['inputSource'] ?? {}
-				if (!selectedInput) return false
-				return selectedInput.value === inputSourceName.id
+			},
+			callback: (feedback) => {
+				const deviceId = requireDeviceId(feedback.options.deviceId)
+				const input = requireText(feedback.options.input, 'Input')
+				const status = self.getCachedDeviceState(deviceId)
+				if (!status) {
+					self.requestDeviceRefresh(deviceId)
+					return false
+				}
+				const capability = status.components?.['main']?.['samsungvd.mediaInputSource']
+				console.log(capability)
+				const inputSourceMap: InputSourceMapEntry[] =
+					(capability?.['supportedInputSourcesMap']?.['value'] as InputSourceMapEntry[]) ?? []
+				const match = inputSourceMap.find((entry) => entry.id === input || entry.name === input)
+				if (!match) return false
+				const selectedInput = capability?.['inputSource']?.['value']
+				return selectedInput === match.id
 			},
 		},
 		MuteState: {
@@ -89,39 +115,64 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 				color: combineRgb(0, 0, 0),
 			},
 			options: [deviceIdDropdownOption],
-			callback: async (feedback) => {
+			subscribe: (feedback) => {
 				const deviceId = feedback.options.deviceId
-				if (!deviceId || typeof deviceId !== 'string') {
-					throw new Error()
+				if (typeof deviceId === 'string') {
+					self.subscribeDeviceState(deviceId)
 				}
-				await refresh(self, deviceId)
-				const status: CapabilityStatus = await self.smartThingsClient.devices.getCapabilityStatus(
-					deviceId,
-					'main',
-					'audioMute',
-				)
-				return status?.['mute']?.['value'] === 'muted'
+			},
+			unsubscribe: (feedback) => {
+				const deviceId = feedback.options.deviceId
+				if (typeof deviceId === 'string') {
+					self.unsubscribeDeviceState(deviceId)
+				}
+			},
+			callback: (feedback) => {
+				const deviceId = requireDeviceId(feedback.options.deviceId)
+				const status = self.getCachedDeviceState(deviceId)
+				if (!status) {
+					self.requestDeviceRefresh(deviceId)
+					return false
+				}
+				const muteValue = status.components?.['main']?.['audioMute']?.['mute']?.['value']
+				return muteValue === 'muted'
 			},
 		},
 		AudioVolume: {
 			name: 'Audio Volume',
 			type: 'advanced',
 			options: [deviceIdDropdownOption],
-			callback: async (feedback) => {
+			subscribe: (feedback) => {
 				const deviceId = feedback.options.deviceId
-				if (!deviceId || typeof deviceId !== 'string') {
-					throw new Error()
+				if (typeof deviceId === 'string') {
+					self.subscribeDeviceState(deviceId)
 				}
-				await refresh(self, deviceId)
-				const status: CapabilityStatus = await self.smartThingsClient.devices.getCapabilityStatus(
-					deviceId,
-					'main',
-					'audioVolume',
-				)
-				const volume = status?.volume?.value as string
-				const unit = status?.volume?.unit as string
-				self.setVariableValues({ volume: volume })
-				return { text: volume + unit }
+			},
+			unsubscribe: (feedback) => {
+				const deviceId = feedback.options.deviceId
+				if (typeof deviceId === 'string') {
+					self.unsubscribeDeviceState(deviceId)
+				}
+			},
+			callback: (feedback) => {
+				const deviceId = requireDeviceId(feedback.options.deviceId)
+				const status = self.getCachedDeviceState(deviceId)
+				if (!status) {
+					self.requestDeviceRefresh(deviceId)
+					return { text: '' }
+				}
+				const volume = status.components?.['main']?.['audioVolume']?.['volume']
+				if (!volume || typeof volume.value === 'undefined') {
+					return { text: '' }
+				}
+				const rawValue = volume.value
+				if (typeof rawValue !== 'string' && typeof rawValue !== 'number') {
+					return { text: '' }
+				}
+				const renderedValue = String(rawValue)
+				self.setVariableValues({ volume: renderedValue })
+				const unit = volume.unit ? String(volume.unit) : ''
+				return { text: `${renderedValue}${unit}` }
 			},
 		},
 	})

@@ -1,7 +1,5 @@
 import { SomeCompanionActionInputField } from '@companion-module/base'
 import type { ModuleInstance } from './main.js'
-import { sleep, refresh } from './helpers.js'
-import { CapabilityStatus, DeviceStatus } from '@smartthings/core-sdk'
 
 export function UpdateActions(self: ModuleInstance): void {
 	const deviceIdDropdownOption: SomeCompanionActionInputField = {
@@ -36,13 +34,13 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!input || typeof input !== 'string') {
 					throw new Error()
 				}
-				await self.smartThingsClient.devices.executeCommand(deviceId, {
+				const client = self.getSmartThingsClient()
+				await client.devices.executeCommand(deviceId, {
 					component: 'main',
 					capability: 'samsungvd.mediaInputSource',
 					command: 'setInputSource',
 					arguments: [input],
 				})
-				await sleep(1500)
 				self.checkFeedbacks('InputState')
 			},
 		},
@@ -54,19 +52,24 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!deviceId || typeof deviceId !== 'string') {
 					throw new Error()
 				}
-				const status: CapabilityStatus = await self.smartThingsClient.devices.getCapabilityStatus(
-					deviceId,
-					'main',
-					'switch',
-				)
-				const isOn = status?.['switch']?.['value'] === 'on'
-				const command = isOn ? 'off' : 'on'
-				await self.smartThingsClient.devices.executeCommand(deviceId, {
+				const client = self.getSmartThingsClient()
+				const deviceState = await self.getDeviceStateSnapshot(deviceId, true)
+				let isOn: boolean | undefined
+				if (deviceState) {
+					const switchState = deviceState.components?.['main']?.['switch']?.['switch']?.['value']
+					isOn = switchState === 'on'
+				} else {
+					const fallback = await client.devices.getStatus(deviceId)
+					isOn = fallback.components?.['main']?.['switch']?.['switch']?.['value'] === 'on'
+				}
+				const isCurrentlyOn = isOn === true
+				const command = isCurrentlyOn ? 'off' : 'on'
+				await client.devices.executeCommand(deviceId, {
 					component: 'main',
 					capability: 'switch',
 					command: command,
 				})
-				await sleep(3000)
+				self.requestDeviceRefresh(deviceId, true)
 				self.checkFeedbacks('PowerState')
 			},
 		},
@@ -100,12 +103,12 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!state || typeof state !== 'string') {
 					throw new Error()
 				}
-				await self.smartThingsClient.devices.executeCommand(deviceId, {
+				const client = self.getSmartThingsClient()
+				await client.devices.executeCommand(deviceId, {
 					component: 'main',
 					capability: 'switch',
 					command: state,
 				})
-				await sleep(4000)
 				self.checkFeedbacks('PowerState')
 			},
 		},
@@ -139,12 +142,12 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!action || typeof action !== 'string') {
 					throw new Error()
 				}
-				await self.smartThingsClient.devices.executeCommand(deviceId, {
+				const client = self.getSmartThingsClient()
+				await client.devices.executeCommand(deviceId, {
 					component: 'main',
 					capability: 'audioVolume',
 					command: action,
 				})
-				await sleep(3000)
 				self.checkFeedbacks('AudioVolume')
 			},
 		},
@@ -156,17 +159,24 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!deviceId || typeof deviceId !== 'string') {
 					throw new Error()
 				}
-				await refresh(self, deviceId)
-				const status: DeviceStatus = await self.smartThingsClient.devices.getStatus(deviceId)
-				const isMute = status?.components?.['main']?.['audioMute']?.['mute']?.['value'] === 'muted'
-				const state = isMute ? 'unmuted' : 'muted'
-				await self.smartThingsClient.devices.executeCommand(deviceId, {
+				const client = self.getSmartThingsClient()
+				const deviceState = await self.getDeviceStateSnapshot(deviceId, true)
+				let isMute: boolean | undefined
+				if (deviceState) {
+					const muteValue = deviceState.components?.['main']?.['audioMute']?.['mute']?.['value']
+					isMute = muteValue === 'muted'
+				} else {
+					const fallback = await client.devices.getStatus(deviceId)
+					isMute = fallback.components?.['main']?.['audioMute']?.['mute']?.['value'] === 'muted'
+				}
+				const state = isMute === true ? 'unmuted' : 'muted'
+				await client.devices.executeCommand(deviceId, {
 					component: 'main',
 					capability: 'audioMute',
 					command: 'setMute',
 					arguments: [state],
 				})
-				await sleep(2000)
+				self.requestDeviceRefresh(deviceId, true)
 				self.checkFeedbacks('MuteState')
 			},
 		},
@@ -200,13 +210,13 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!state || typeof state !== 'string') {
 					throw new Error()
 				}
-				await self.smartThingsClient.devices.executeCommand(deviceId, {
+				const client = self.getSmartThingsClient()
+				await client.devices.executeCommand(deviceId, {
 					component: 'main',
 					capability: 'audioMute',
 					command: 'setMute',
 					arguments: [state],
 				})
-				await sleep(4000)
 				self.checkFeedbacks('MuteState')
 			},
 		},
