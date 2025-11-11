@@ -1,6 +1,6 @@
 import { combineRgb, SomeCompanionFeedbackInputField } from '@companion-module/base'
 import type { ModuleInstance } from './main.js'
-import { InputSourceMapEntry } from './types.js'
+import { getInputsource } from './helpers.js'
 
 function requireDeviceId(value: unknown): string {
 	if (!value || typeof value !== 'string') {
@@ -96,13 +96,11 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 					self.requestDeviceRefresh(deviceId)
 					return false
 				}
-				const capability = status.components?.['main']?.['samsungvd.mediaInputSource']
-				console.log(capability)
-				const inputSourceMap: InputSourceMapEntry[] =
-					(capability?.['supportedInputSourcesMap']?.['value'] as InputSourceMapEntry[]) ?? []
-				const match = inputSourceMap.find((entry) => entry.id === input || entry.name === input)
-				if (!match) return false
-				const selectedInput = capability?.['inputSource']?.['value']
+				const match = getInputsource(input, status)
+				if (!match) {
+					return false
+				}
+				const selectedInput = status.components?.['main']?.['samsungvd.mediaInputSource']?.['inputSource']?.['value']
 				return selectedInput === match.id
 			},
 		},

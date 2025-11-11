@@ -1,6 +1,6 @@
 import { SomeCompanionActionInputField } from '@companion-module/base'
 import type { ModuleInstance } from './main.js'
-import { InputSourceMapEntry } from './types.js'
+import { getInputsource } from './helpers.js'
 
 export function UpdateActions(self: ModuleInstance): void {
 	const deviceIdDropdownOption: SomeCompanionActionInputField = {
@@ -36,10 +36,7 @@ export function UpdateActions(self: ModuleInstance): void {
 					throw new Error()
 				}
 				const deviceState = await self.getDeviceStateSnapshot(deviceId, true)
-				const capability = deviceState?.components?.['main']?.['samsungvd.mediaInputSource']
-				const inputSourceMap: InputSourceMapEntry[] =
-					(capability?.['supportedInputSourcesMap']?.['value'] as InputSourceMapEntry[]) ?? []
-				const newInput = inputSourceMap.find((inputSource) => inputSource.id === input || inputSource.name === input)
+				const newInput = getInputsource(input, deviceState)
 				if (!newInput) {
 					throw new Error(`Input ${input} not found`)
 				}
