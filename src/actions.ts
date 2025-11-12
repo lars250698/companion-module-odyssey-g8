@@ -75,6 +75,7 @@ export function UpdateActions(self: ModuleInstance): void {
 					command: command,
 				})
 				self.optimisticSetAttribute(deviceId, 'main', 'switch', 'switch', command)
+				self.optimisticSetAttribute(deviceId, 'main', 'audioMute', 'mute', command === 'off' ? 'muted' : 'unmuted')
 			},
 		},
 		power: {
@@ -114,6 +115,7 @@ export function UpdateActions(self: ModuleInstance): void {
 					command: state,
 				})
 				self.optimisticSetAttribute(deviceId, 'main', 'switch', 'switch', state)
+				self.optimisticSetAttribute(deviceId, 'main', 'audioMute', 'mute', state === 'off' ? 'muted' : 'unmuted')
 			},
 		},
 		volume: {
