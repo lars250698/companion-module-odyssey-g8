@@ -165,6 +165,7 @@ export function UpdateActions(self: ModuleInstance): void {
 					capability: 'audioVolume',
 					command: action,
 				})
+				self.optimisticSetAttribute(deviceId, 'main', 'audioMute', 'mute', 'unmuted')
 			},
 		},
 		muteToggle: {
