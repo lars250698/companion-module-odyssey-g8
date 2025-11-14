@@ -206,10 +206,8 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> implements Device
 		)
 		const muteValue = this.formatAttributeValue(status?.components?.['main']?.['audioMute']?.['mute']?.['value'])
 		const volumeAttribute = status?.components?.['main']?.['audioVolume']?.['volume']
-		let volumeValue = this.formatAttributeValue(volumeAttribute?.value)
-		if (volumeValue && typeof volumeAttribute?.unit === 'string') {
-			volumeValue = `${volumeValue}${volumeAttribute.unit}`
-		}
+		const volumeValue = volumeAttribute?.value as number
+
 		const values: CompanionVariableValues = {
 			[ids.power]: powerValue,
 			[ids.input]: inputValue,
