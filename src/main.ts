@@ -14,32 +14,17 @@ import { UpdateActions } from './actions.js'
 import { UpdateFeedbacks } from './feedbacks.js'
 import { Device, DeviceStatus, RefreshTokenAuthenticator, SmartThingsClient } from '@smartthings/core-sdk'
 import qs from 'querystring'
-import { refresh } from './helpers.js'
+import { DeviceStateManager, type DeviceStateHost } from './state-manager.js'
 
-type DeviceStateEntry = {
-	refCount: number
-	status?: DeviceStatus
-	serialized?: string
-	timer?: NodeJS.Timeout
-	refreshPromise?: Promise<void>
-	backoffMs: number
-	suppressUpdatesUntil?: number
-}
-
-const DEFAULT_POLL_MS = 10000
-const MIN_POLL_MS = 1000
-const MAX_BACKOFF_MS = 60000
-const OPTIMISTIC_SUPPRESS_MS = 5000
-
-export class ModuleInstance extends InstanceBase<ModuleConfig> {
+export class ModuleInstance extends InstanceBase<ModuleConfig> implements DeviceStateHost {
 	config!: ModuleConfig // Setup in init()
 	smartThingsClient: SmartThingsClient | undefined
 	devices: Device[] = []
-	deviceState: Map<string, DeviceStateEntry> = new Map()
-	pollIntervalMs = DEFAULT_POLL_MS
+	readonly stateManager: DeviceStateManager
 
 	constructor(internal: unknown) {
 		super(internal)
+		this.stateManager = new DeviceStateManager(this)
 	}
 
 	async init(config: ModuleConfig): Promise<void> {
@@ -47,19 +32,14 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 	}
 	// When module gets deleted
 	async destroy(): Promise<void> {
-		this.clearAllDeviceState()
+		this.stateManager.clearAllDeviceState()
 		this.log('debug', 'destroy')
 	}
 
 	async configUpdated(config: ModuleConfig): Promise<void> {
 		this.config = config
-		const newInterval = this.normalizePollInterval(this.config.pollInterval)
-		const intervalChanged = newInterval !== this.pollIntervalMs
-		this.pollIntervalMs = newInterval
-		this.config.pollInterval = newInterval
-		if (intervalChanged) {
-			this.rescheduleDevicePolling()
-		}
+		const normalizedInterval = this.stateManager.setPollInterval(this.config.pollInterval)
+		this.config.pollInterval = normalizedInterval
 
 		const redirect = encodeURIComponent('https://bitfocus.github.io/companion-oauth/callback')
 		const scope = encodeURIComponent((config.scopes || '').replace(/\s+/g, ' '))
@@ -88,12 +68,12 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 			})
 			this.smartThingsClient = new SmartThingsClient(authenticator)
 			this.devices = await this.smartThingsClient.devices.list()
-			this.pruneDeviceStateForKnownDevices()
+			this.stateManager.pruneDeviceStateForKnownDevices()
 			this.updateStatus(InstanceStatus.Ok)
 		} else {
 			this.smartThingsClient = undefined
 			this.devices = []
-			this.clearAllDeviceState()
+			this.stateManager.clearAllDeviceState()
 			this.updateStatus(InstanceStatus.AuthenticationFailure)
 		}
 
@@ -169,45 +149,19 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 	}
 
 	subscribeDeviceState(deviceId?: string): void {
-		if (!deviceId || typeof deviceId !== 'string') return
-		if (!this.smartThingsClient) return
-		if (!this.isKnownDevice(deviceId)) {
-			this.log('warn', `Attempted to subscribe unknown device ${deviceId}`)
-			return
-		}
-		const entry = this.ensureDeviceStateEntry(deviceId)
-		entry.refCount += 1
-		if (entry.refCount === 1) {
-			this.refreshDeviceState(deviceId, true).catch((err) => {
-				this.log('error', `Initial device refresh failed for ${deviceId}: ${String(err)}`)
-			})
-		}
+		this.stateManager.subscribeDeviceState(deviceId)
 	}
 
 	unsubscribeDeviceState(deviceId?: string): void {
-		if (!deviceId || typeof deviceId !== 'string') return
-		const entry = this.deviceState.get(deviceId)
-		if (!entry) return
-		entry.refCount = Math.max(0, entry.refCount - 1)
-		if (entry.refCount === 0) {
-			if (entry.timer) {
-				clearTimeout(entry.timer)
-			}
-			this.deviceState.delete(deviceId)
-			this.clearDeviceVariableValues(deviceId)
-		}
+		this.stateManager.unsubscribeDeviceState(deviceId)
 	}
 
 	getCachedDeviceState(deviceId: string): DeviceStatus | undefined {
-		return this.deviceState.get(deviceId)?.status
+		return this.stateManager.getCachedDeviceState(deviceId)
 	}
 
 	requestDeviceRefresh(deviceId: string, forceFeedbackUpdate = false): void {
-		const entry = this.deviceState.get(deviceId)
-		if (!entry) return
-		this.refreshDeviceState(deviceId, forceFeedbackUpdate).catch((err) => {
-			this.log('error', `Manual device refresh failed for ${deviceId}: ${String(err)}`)
-		})
+		this.stateManager.requestDeviceRefresh(deviceId, forceFeedbackUpdate)
 	}
 
 	getSmartThingsClient(): SmartThingsClient {
@@ -228,15 +182,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 	}
 
 	async getDeviceStateSnapshot(deviceId: string, forceRefresh = false): Promise<DeviceStatus | undefined> {
-		if (!this.smartThingsClient) return undefined
-		const entry = this.ensureDeviceStateEntry(deviceId)
-		if (forceRefresh || !entry.status) {
-			const pending = forceRefresh || !entry.status ? this.refreshDeviceState(deviceId, true) : entry.refreshPromise
-			if (pending) {
-				await pending
-			}
-		}
-		return entry.status
+		return this.stateManager.getDeviceStateSnapshot(deviceId, forceRefresh)
 	}
 
 	optimisticSetAttribute(
@@ -247,35 +193,28 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		value: unknown,
 		extraFields?: Record<string, unknown>,
 	): void {
-		this.optimisticUpdateDeviceState(deviceId, (status) => {
-			const components = (status.components ??= {} as Record<string, any>)
-			const component = (components[componentId] ??= {} as Record<string, any>)
-			const capability = (component[capabilityId] ??= {} as Record<string, any>)
-			const attribute = (capability[attributeId] ??= {} as Record<string, any>)
-			attribute.value = value
-			if (extraFields) {
-				for (const [key, val] of Object.entries(extraFields)) {
-					attribute[key] = val
-				}
-			}
-		})
+		this.stateManager.optimisticSetAttribute(deviceId, componentId, capabilityId, attributeId, value, extraFields)
 	}
 
 	updateDeviceVariableValues(deviceId: string): void {
 		if (!this.isKnownDevice(deviceId)) return
 		const ids = this.getDeviceVariableIds(deviceId)
-		const status = this.deviceState.get(deviceId)?.status
+		const status = this.stateManager.getCachedDeviceState(deviceId)
 		const powerValue = this.formatAttributeValue(status?.components?.['main']?.['switch']?.['switch']?.['value'])
 		const inputValue = this.formatAttributeValue(
 			status?.components?.['main']?.['samsungvd.mediaInputSource']?.['inputSource']?.['value'],
 		)
 		const muteValue = this.formatAttributeValue(status?.components?.['main']?.['audioMute']?.['mute']?.['value'])
 		const volumeAttribute = status?.components?.['main']?.['audioVolume']?.['volume']
+		let volumeValue = this.formatAttributeValue(volumeAttribute?.value)
+		if (volumeValue && typeof volumeAttribute?.unit === 'string') {
+			volumeValue = `${volumeValue}${volumeAttribute.unit}`
+		}
 		const values: CompanionVariableValues = {
 			[ids.power]: powerValue,
 			[ids.input]: inputValue,
 			[ids.mute]: muteValue,
-			[ids.volume]: (volumeAttribute?.value as number) ?? 0,
+			[ids.volume]: volumeValue,
 		}
 		this.setVariableValues(values)
 	}
@@ -306,16 +245,7 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		})
 	}
 
-	private normalizePollInterval(value: unknown): number {
-		const numeric = typeof value === 'number' && !Number.isNaN(value) ? value : DEFAULT_POLL_MS
-		return Math.min(Math.max(numeric, MIN_POLL_MS), MAX_BACKOFF_MS)
-	}
-
-	private getConfiguredPollInterval(): number {
-		return this.pollIntervalMs
-	}
-
-	private isKnownDevice(deviceId: string): boolean {
+	isKnownDevice(deviceId: string): boolean {
 		return this.devices.some((device) => device.deviceId === deviceId)
 	}
 
@@ -325,124 +255,26 @@ export class ModuleInstance extends InstanceBase<ModuleConfig> {
 		return ''
 	}
 
-	private ensureDeviceStateEntry(deviceId: string): DeviceStateEntry {
-		let entry = this.deviceState.get(deviceId)
-		if (!entry) {
-			entry = { refCount: 0, backoffMs: this.getConfiguredPollInterval() }
-			this.deviceState.set(deviceId, entry)
-		}
-		return entry
-	}
-
-	private scheduleNextDeviceRefresh(deviceId: string, entry: DeviceStateEntry): void {
-		if (entry.timer) {
-			clearTimeout(entry.timer)
-		}
-		const base = entry.backoffMs || this.getConfiguredPollInterval()
-		const jitterWindow = Math.min(1000, Math.floor(base * 0.1))
-		const delay = base + Math.floor(Math.random() * (jitterWindow + 1))
-		entry.timer = setTimeout(() => {
-			this.refreshDeviceState(deviceId).catch((err) => {
-				this.log('error', `Scheduled device refresh failed for ${deviceId}: ${String(err)}`)
-			})
-		}, delay)
-	}
-
-	private async refreshDeviceState(deviceId: string, forceFeedbackUpdate = false): Promise<void> {
-		const entry = this.deviceState.get(deviceId)
-		const client = this.smartThingsClient
-		if (!entry || !client) return
-		if (entry.refreshPromise) return entry.refreshPromise
-		const promise = (async () => {
-			try {
-				await refresh(this, deviceId)
-				const status = await client.devices.getStatus(deviceId)
-				const now = Date.now()
-				if (entry.suppressUpdatesUntil && now < entry.suppressUpdatesUntil) {
-					const delay = Math.max(entry.suppressUpdatesUntil - now, MIN_POLL_MS)
-					entry.backoffMs = delay
-					return
-				}
-				const serialized = JSON.stringify(status)
-				const changed = entry.serialized !== serialized
-				entry.status = status
-				entry.serialized = serialized
-				entry.backoffMs = this.getConfiguredPollInterval()
-				entry.suppressUpdatesUntil = undefined
-				if (changed || forceFeedbackUpdate) {
-					this.updateDeviceVariableValues(deviceId)
-					this.refreshFeedbacksFromState()
-				}
-			} catch (err) {
-				const current = entry.backoffMs || this.getConfiguredPollInterval()
-				entry.backoffMs = Math.min(current * 2, MAX_BACKOFF_MS)
-				this.log('error', `Failed to get status for ${deviceId}: ${String(err)}`)
-			} finally {
-				entry.refreshPromise = undefined
-				if (entry.refCount > 0) {
-					this.scheduleNextDeviceRefresh(deviceId, entry)
-				} else {
-					if (entry.timer) {
-						clearTimeout(entry.timer)
-					}
-					this.deviceState.delete(deviceId)
-				}
-			}
-		})()
-		entry.refreshPromise = promise
-		return promise
-	}
-
-	private rescheduleDevicePolling(): void {
-		for (const [deviceId, entry] of this.deviceState.entries()) {
-			entry.backoffMs = this.getConfiguredPollInterval()
-			if (entry.refCount > 0) {
-				this.scheduleNextDeviceRefresh(deviceId, entry)
-			}
-		}
-	}
-
-	private pruneDeviceStateForKnownDevices(): void {
-		for (const [deviceId, entry] of this.deviceState.entries()) {
-			if (!this.isKnownDevice(deviceId)) {
-				if (entry.timer) {
-					clearTimeout(entry.timer)
-				}
-				this.deviceState.delete(deviceId)
-				this.clearDeviceVariableValues(deviceId)
-			}
-		}
-	}
-
-	private clearAllDeviceState(): void {
-		for (const entry of this.deviceState.values()) {
-			if (entry.timer) {
-				clearTimeout(entry.timer)
-			}
-		}
-		this.deviceState.clear()
-		this.updateAllDeviceVariableValues()
-	}
-
 	private refreshFeedbacksFromState(): void {
 		this.checkFeedbacks('PowerState', 'InputState', 'MuteState', 'AudioVolume')
 	}
 
-	private optimisticUpdateDeviceState(deviceId: string, mutator: (status: DeviceStatus) => void): void {
-		const entry = this.ensureDeviceStateEntry(deviceId)
-		const base: DeviceStatus = entry.status
-			? (JSON.parse(JSON.stringify(entry.status)) as DeviceStatus)
-			: ({ components: {} } as DeviceStatus)
-		try {
-			mutator(base)
-		} catch (err) {
-			this.log('debug', `Optimistic update failed for ${deviceId}: ${String(err)}`)
-			return
-		}
-		entry.status = base
-		entry.serialized = JSON.stringify(base)
-		entry.suppressUpdatesUntil = Date.now() + OPTIMISTIC_SUPPRESS_MS
+	handleDeviceStateUpdated(deviceId: string, options?: { changed?: boolean; forceFeedback?: boolean }): void {
 		this.updateDeviceVariableValues(deviceId)
+		if (options?.changed || options?.forceFeedback) {
+			this.refreshFeedbacksFromState()
+		}
+	}
+
+	handleDeviceStateCleared(deviceId: string): void {
+		this.clearDeviceVariableValues(deviceId)
+		this.refreshFeedbacksFromState()
+	}
+
+	handleAllDeviceStatesCleared(): void {
+		for (const device of this.devices) {
+			this.clearDeviceVariableValues(device.deviceId)
+		}
 		this.refreshFeedbacksFromState()
 	}
 }
