@@ -1,6 +1,6 @@
 import { SomeCompanionActionInputField } from '@companion-module/base'
 import type { ModuleInstance } from './main.js'
-import { getInputsource } from './helpers.js'
+import { getCachedOrLiveDeviceState, getInputsource } from './helpers.js'
 
 export function UpdateActions(self: ModuleInstance): void {
 	const deviceIdDropdownOption: SomeCompanionActionInputField = {
@@ -35,7 +35,7 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!input || typeof input !== 'string') {
 					throw new Error()
 				}
-				const deviceState = await self.getDeviceStateSnapshot(deviceId, true)
+				const deviceState = await getCachedOrLiveDeviceState(self, deviceId)
 				const newInput = getInputsource(input, deviceState)
 				if (!newInput) {
 					throw new Error(`Input ${input} not found`)
@@ -59,14 +59,11 @@ export function UpdateActions(self: ModuleInstance): void {
 					throw new Error()
 				}
 				const client = self.getSmartThingsClient()
-				const deviceState = await self.getDeviceStateSnapshot(deviceId, true)
+				const deviceState = await getCachedOrLiveDeviceState(self, deviceId)
 				let isCurrentlyOn: boolean | undefined
 				if (deviceState) {
 					const switchState = deviceState.components?.['main']?.['switch']?.['switch']?.['value']
 					isCurrentlyOn = switchState === 'on'
-				} else {
-					const fallback = await client.devices.getStatus(deviceId)
-					isCurrentlyOn = fallback.components?.['main']?.['switch']?.['switch']?.['value'] === 'on'
 				}
 				const command = isCurrentlyOn === true ? 'off' : 'on'
 				await client.devices.executeCommand(deviceId, {
@@ -148,7 +145,7 @@ export function UpdateActions(self: ModuleInstance): void {
 				if (!action || typeof action !== 'string') {
 					throw new Error()
 				}
-				const deviceState = await self.getDeviceStateSnapshot(deviceId)
+				const deviceState = await getCachedOrLiveDeviceState(self, deviceId)
 				const volumeStatus = deviceState?.components?.['main']?.['audioVolume']?.['volume']
 				if (volumeStatus) {
 					const delta = action === 'volumeUp' ? 1 : -1
@@ -177,14 +174,11 @@ export function UpdateActions(self: ModuleInstance): void {
 					throw new Error()
 				}
 				const client = self.getSmartThingsClient()
-				const deviceState = await self.getDeviceStateSnapshot(deviceId, true)
+				const deviceState = await getCachedOrLiveDeviceState(self, deviceId)
 				let isMute: boolean | undefined
 				if (deviceState) {
 					const muteValue = deviceState.components?.['main']?.['audioMute']?.['mute']?.['value']
 					isMute = muteValue === 'muted'
-				} else {
-					const fallback = await client.devices.getStatus(deviceId)
-					isMute = fallback.components?.['main']?.['audioMute']?.['mute']?.['value'] === 'muted'
 				}
 				const state = isMute === true ? 'unmuted' : 'muted'
 				await client.devices.executeCommand(deviceId, {

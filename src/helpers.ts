@@ -26,3 +26,15 @@ export function getInputsource(idOrName: string, state?: DeviceStatus): InputSou
 	}
 	return undefined
 }
+
+export async function getCachedOrLiveDeviceState(
+	self: ModuleInstance,
+	deviceId: string,
+): Promise<DeviceStatus | undefined> {
+	if (!self.isKnownDevice(deviceId)) return undefined
+	const cached = self.getCachedDeviceState(deviceId)
+	if (cached) return cached
+
+	const client = self.getSmartThingsClient()
+	return client.devices.getStatus(deviceId)
+}
